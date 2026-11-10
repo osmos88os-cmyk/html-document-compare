@@ -1,0 +1,72 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pyinstaller==6.16.0
+      - name: Engine regression tests
+        run: python -m unittest discover -s tests -v
+      - name: Desktop UI smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python run.py --smoke-test --left examples/left.html --right examples/right.html --screenshot ui-smoke.png
+      - name: Package Windows x64
+        run: python -m PyInstaller --noconfirm --clean --windowed --onedir --name HTMLCompare run.py
+      - name: Packaged executable smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath '.\dist\HTMLCompare\HTMLCompare.exe' -ArgumentList '--smoke-test' -PassThru
+          if (-not $process.WaitForExit(60000)) {
+            $process.Kill()
+            throw 'Packaged executable did not exit within 60 seconds'
+          }
+          if ($process.ExitCode -ne 0) { throw "Executable exited with code $($process.ExitCode)" }
+      - name: Add documentation and examples
+        shell: pwsh
+        run: |
+          python scripts/collect_licenses.py dist/HTMLCompare/licenses
+          Copy-Item README.md, THIRD_PARTY_NOTICES.md -Destination dist/HTMLCompare
+          Copy-Item examples -Recurse -Destination dist/HTMLCompare/examples
+          Compress-Archive -Path dist/HTMLCompare -DestinationPath HTMLCompare-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HTMLCompare-Windows-x64
+          path: |
+            HTMLCompare-Windows-x64.zip
+            ui-smoke.png
+          retention-days: 30
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: HTMLCompare-Windows-x64
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" HTMLCompare-Windows-x64.zip --verify-tag --title "Сверка HTML $RELEASE_TAG" --notes "Локальная сверка HTML для Windows 10/11 x64. Распакуйте весь архив и запустите HTMLCompare.exe. Подробности и ограничения — в README.md."

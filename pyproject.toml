@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "html-document-compare"
+version = "0.1.0"
+description = "Локальная сверка HTML правовых документов"
+requires-python = ">=3.11"
+dependencies = ["lxml==5.4.0", "PySide6-Essentials==6.8.3"]
+
+[project.scripts]
+html-compare = "htmlcompare.app:main"
+
+[tool.setuptools.packages.find]
+include = ["htmlcompare*"]
