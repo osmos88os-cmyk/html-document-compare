@@ -109,6 +109,16 @@ void categories_and_ranges() {
     check(has(mixed, words | numbers), "date inside an inserted phrase");
 }
 
+void heading_case_is_ignored() {
+    const auto same_title = diff(U"<h1>УКАЗ ПРЕЗИДЕНТА РОССИЙСКОЙ ФЕДЕРАЦИИ</h1><p>Текст.</p>",
+                                 U"<h1>Указ Президента Российской Федерации</h1><p>Текст.</p>");
+    check(same_title.changes.empty(), "heading capitalization is ignored");
+    const auto body_case = diff(U"<p>Текст правила.</p>", U"<p>текст правила.</p>");
+    check(!body_case.changes.empty() && has(body_case, words), "body capitalization remains visible");
+    const auto title_typo = diff(U"<h1>Указ Президента</h1>", U"<h1>Указ Призидента</h1>");
+    check(!title_typo.changes.empty() && has(title_typo, words), "actual title typo remains visible");
+}
+
 void aligned_insertion() {
     auto r = diff(U"<p>1. Первый общий пункт.</p><p>2. Второй общий пункт.</p>",
                   U"<p>1. Первый общий пункт.</p><p>1.1. Длинная вставка с дополнительным текстом.</p><p>2. Второй общий пункт.</p>");
@@ -256,7 +266,8 @@ int main(int argc, char** argv) {
     const std::vector<std::pair<const char*, std::function<void()>>> cases = {
         {"character edit scripts", edits_round_trip}, {"XHTML", ordinary_xhtml}, {"strict text", strict_text},
         {"categories and ranges", categories_and_ranges}, {"alignment", aligned_insertion},
-        {"reference rules", reference_rules}, {"tables and review persistence", tables_and_independent_decisions},
+        {"heading capitalization", heading_case_is_ignored}, {"reference rules", reference_rules},
+        {"tables and review persistence", tables_and_independent_decisions},
         {"encoding and links", encoding_and_links},
     };
     int failures = 0;

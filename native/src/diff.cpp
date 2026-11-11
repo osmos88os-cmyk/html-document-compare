@@ -389,6 +389,9 @@ private:
     void compare_text(View a, View b, std::size_t lo, std::size_t ro, Mask extra,
                       const Text& context, bool heading = false) {
         if (a == b) return;
+        // Act titles and document headings are routinely exported with different
+        // capitalization by ТЕХН and К+. Treat case alone as equivalent there.
+        if (heading && lower(compact(a)) == lower(compact(b))) return;
         if (canonical(a, heading) == canonical(b, heading)) {
             for (auto e : character_edits(a, b)) {
                 add(format | extra, Priority::low, piece(a, e.left), piece(b, e.right), context, U"Различается оформление.",
