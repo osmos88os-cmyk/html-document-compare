@@ -1,0 +1,71 @@
+name: Native Windows candidates
+on:
+  push:
+    branches: [native-compare, main]
+    paths: [CMakeLists.txt, 'native/**', 'examples/**', '.github/workflows/native-windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - edition: Windows7-x64
+            legacy: 'ON'
+          - edition: Windows10-11-x64
+            legacy: 'OFF'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure MSVC x64
+        run: cmake -S . -B build/win -G "Visual Studio 17 2022" -T v143 -A x64 -DHTMLCOMPARE_LEGACY=${{ matrix.legacy }}
+      - name: Build and test
+        run: |
+          cmake --build build/win --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build/win -C Release --output-on-failure
+      - name: Package portable candidate
+        run: cmake --install build/win --config Release --prefix dist/HTMLCompare
+      - name: Exercise the packaged EXE
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path 'dist/HTMLCompare/HTMLCompare.exe').Path
+          $left = (Resolve-Path 'examples/left.html').Path
+          $right = (Resolve-Path 'examples/right.html').Path
+          function Invoke-Compare($parameters) {
+            $process = Start-Process -FilePath $exe -ArgumentList $parameters -PassThru
+            if (-not $process.WaitForExit(60000)) {
+              $process.Kill()
+              throw 'Packaged executable did not finish within 60 seconds'
+            }
+            if ($process.ExitCode -ne 0) { throw "Executable exited with $($process.ExitCode)" }
+          }
+          Invoke-Compare @('--smoke-test', ('"{0}"' -f $left), ('"{0}"' -f $right))
+          $reportPath = Join-Path $pwd 'report.html'
+          Invoke-Compare @('--report', ('"{0}"' -f $left), ('"{0}"' -f $right), ('"{0}"' -f $reportPath), '--strict')
+          Compress-Archive -Path dist/HTMLCompare -DestinationPath HTMLCompare-${{ matrix.edition }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-${{ matrix.edition }}
+          path: |
+            HTMLCompare-${{ matrix.edition }}.zip
+            report.html
+          if-no-files-found: error
+          retention-days: 30
+  parity:
+    runs-on: windows-2022
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: candidate-*
+          path: candidates
+      - name: Compare output from both editions
+        shell: pwsh
+        run: |
+          $old = (Get-FileHash candidates/candidate-Windows7-x64/report.html).Hash
+          $new = (Get-FileHash candidates/candidate-Windows10-11-x64/report.html).Hash
+          if ($old -ne $new) { throw 'The two editions produced different comparison results' }

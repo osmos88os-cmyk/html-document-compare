@@ -1,0 +1,27 @@
+#pragma code_page(65001)
+#include <windows.h>
+#include "resource.h"
+
+1 RT_MANIFEST "app.manifest"
+
+ID_SETTINGS DIALOGEX 0, 0, 266, 200
+STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Настройки сравнения"
+FONT 9, "Segoe UI"
+BEGIN
+    GROUPBOX "Режим", -1, 9, 7, 247, 48
+    AUTORADIOBUTTON "По структуре документа", ID_STRUCTURED, 17, 20, 223, 12, WS_GROUP | WS_TABSTOP
+    AUTORADIOBUTTON "Строгий, посимвольный", ID_STRICT, 17, 35, 223, 12
+    GROUPBOX "Категории для списка и подсветки", -1, 9, 62, 247, 105
+    AUTOCHECKBOX "Слова", ID_CATEGORY, 17, 75, 110, 12, WS_TABSTOP
+    AUTOCHECKBOX "Числа и даты", ID_CATEGORY + 1, 17, 91, 110, 12
+    AUTOCHECKBOX "Пунктуация", ID_CATEGORY + 2, 17, 107, 110, 12
+    AUTOCHECKBOX "Редакционные отметки", ID_CATEGORY + 3, 17, 123, 115, 12
+    AUTOCHECKBOX "Расположение отметок", ID_CATEGORY + 4, 17, 139, 115, 12
+    AUTOCHECKBOX "Ссылки", ID_CATEGORY + 5, 139, 75, 112, 12
+    AUTOCHECKBOX "Таблицы", ID_CATEGORY + 6, 139, 91, 112, 12
+    AUTOCHECKBOX "Структура и пропуски", ID_CATEGORY + 7, 139, 107, 112, 12
+    AUTOCHECKBOX "Оформление и пробелы", ID_CATEGORY + 8, 139, 123, 112, 12
+    DEFPUSHBUTTON "Применить", IDOK, 133, 178, 62, 14
+    PUSHBUTTON "Отмена", IDCANCEL, 199, 178, 57, 14
+END

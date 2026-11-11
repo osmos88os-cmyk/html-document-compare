@@ -1,0 +1,4 @@
+#define ID_SETTINGS 101
+#define ID_STRUCTURED 110
+#define ID_STRICT 111
+#define ID_CATEGORY 120
