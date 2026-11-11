@@ -28,7 +28,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir build/win -C Release --output-on-failure
       - name: Package portable candidate
-        run: cmake --install build/win --config Release --prefix dist/HTMLCompare
+        run: cmake --install build/win --config Release --component runtime --prefix dist/HTMLCompare
       - name: Exercise the packaged EXE
         shell: pwsh
         run: |
@@ -43,7 +43,8 @@ jobs:
             }
             if ($process.ExitCode -ne 0) { throw "Executable exited with $($process.ExitCode)" }
           }
-          Invoke-Compare @('--smoke-test', ('"{0}"' -f $left), ('"{0}"' -f $right))
+          $reviewPath = Join-Path $pwd 'review.json'
+          Invoke-Compare @('--smoke-test', ('"{0}"' -f $left), ('"{0}"' -f $right), ('"{0}"' -f $reviewPath))
           $reportPath = Join-Path $pwd 'report.html'
           Invoke-Compare @('--report', ('"{0}"' -f $left), ('"{0}"' -f $right), ('"{0}"' -f $reportPath), '--strict')
           Compress-Archive -Path dist/HTMLCompare -DestinationPath HTMLCompare-${{ matrix.edition }}.zip
@@ -53,6 +54,7 @@ jobs:
           path: |
             HTMLCompare-${{ matrix.edition }}.zip
             report.html
+            review.json
           if-no-files-found: error
           retention-days: 30
   parity:
@@ -69,3 +71,19 @@ jobs:
           $old = (Get-FileHash candidates/candidate-Windows7-x64/report.html).Hash
           $new = (Get-FileHash candidates/candidate-Windows10-11-x64/report.html).Hash
           if ($old -ne $new) { throw 'The two editions produced different comparison results' }
+      - name: Open a review from the other edition
+        shell: pwsh
+        run: |
+          foreach ($edition in @('Windows7-x64', 'Windows10-11-x64')) {
+            $other = if ($edition -eq 'Windows7-x64') { 'Windows10-11-x64' } else { 'Windows7-x64' }
+            Expand-Archive "candidates/candidate-$edition/HTMLCompare-$edition.zip" -DestinationPath "test-$edition"
+            $folder = (Resolve-Path "test-$edition/HTMLCompare").Path
+            $review = (Resolve-Path "candidates/candidate-$other/review.json").Path
+            $parameters = @('--smoke-test', ('"{0}/examples/left.html"' -f $folder), ('"{0}/examples/right.html"' -f $folder), ('"{0}"' -f $review))
+            $process = Start-Process -FilePath "$folder/HTMLCompare.exe" -ArgumentList $parameters -PassThru
+            if (-not $process.WaitForExit(60000)) {
+              $process.Kill()
+              throw "Review test for $edition timed out"
+            }
+            if ($process.ExitCode -ne 0) { throw "Review test for $edition exited with $($process.ExitCode)" }
+          }

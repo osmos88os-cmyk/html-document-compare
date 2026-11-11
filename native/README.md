@@ -26,8 +26,8 @@ cmake --build build/win7 --config Release
 cmake --build build/win10 --config Release
 ctest --test-dir build/win7 -C Release --output-on-failure
 ctest --test-dir build/win10 -C Release --output-on-failure
-cmake --install build/win7 --config Release --prefix dist/win7/HTMLCompare
-cmake --install build/win10 --config Release --prefix dist/win10/HTMLCompare
+cmake --install build/win7 --config Release --component runtime --prefix dist/win7/HTMLCompare
+cmake --install build/win10 --config Release --component runtime --prefix dist/win10/HTMLCompare
 ~~~
 
 GitHub Actions сохраняет кандидатов в **Artifacts**. Для выпуска распакуйте каждый архив на целевых ОС, запустите EXE под обычной учётной записью без сети и проверьте примеры из examples. Убедитесь, что кнопка с биноклем и клавиши работают, длинная вставка не сдвигает следующий пункт и JSON открывается в обеих версиях. Опубликуйте ZIP в Releases после приёмки на Windows 7 SP1, Windows 10 22H2 и Windows 11 x64.

@@ -101,7 +101,7 @@ public:
     }
     HWND hwnd() const { return window_; }
     bool create();
-    bool smoke(const fs::path& left, const fs::path& right);
+    bool smoke(const fs::path& left, const fs::path& right, const fs::path& fixture);
 
 private:
     HINSTANCE instance_;
@@ -708,13 +708,23 @@ void App::command(int id, int notification) {
     }
 }
 
-bool App::smoke(const fs::path& left, const fs::path& right) {
+bool App::smoke(const fs::path& left, const fs::path& right, const fs::path& fixture) {
     left_ = left; right_ = right;
     auto before = parse_file(left);
     auto after = parse_file(right);
     ShowWindow(window_, SW_SHOWNOACTIVATE);
     display(std::make_unique<Result>(compare(std::move(before), std::move(after), Mode::structured)));
     if (result_->changes.empty() || !sheet_->smoke_geometry()) return false;
+    if (!fixture.empty()) {
+        auto& first = result_->changes.front();
+        if (fs::exists(fixture)) {
+            load_review(*result_, fixture);
+            if (first.decision != Decision::confirmed || first.comment != U"Проверено" || first.history.empty()) return false;
+        } else {
+            review(first, Decision::confirmed, Priority::high, U"Проверено");
+            save_review(*result_, fixture);
+        }
+    }
     const auto original = selected_;
     SendMessageW(window_, WM_COMMAND, binoculars, 0);
     UpdateWindow(sheet_->hwnd());
@@ -738,7 +748,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     int argc = 0;
     auto args = CommandLineToArgvW(GetCommandLineW(), &argc);
     struct Arguments { LPWSTR* p; ~Arguments() { LocalFree(p); } } owned{args};
-    const bool smoke = argc == 4 && std::wstring_view(args[1]) == L"--smoke-test";
+    const bool smoke = (argc == 4 || argc == 5) && std::wstring_view(args[1]) == L"--smoke-test";
     const bool report_only = (argc == 5 || argc == 6) && std::wstring_view(args[1]) == L"--report";
     try {
         if (report_only) {
@@ -753,7 +763,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         InitCommonControlsEx(&controls);
         App app(instance);
         if (!app.create()) return 1;
-        if (smoke) return app.smoke(args[2], args[3]) ? 0 : 2;
+        if (smoke) return app.smoke(args[2], args[3], argc == 5 ? fs::path(args[4]) : fs::path{}) ? 0 : 2;
         ShowWindow(app.hwnd(), show);
         UpdateWindow(app.hwnd());
         ACCEL keys[] = {
