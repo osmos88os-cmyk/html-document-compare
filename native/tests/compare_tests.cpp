@@ -138,6 +138,14 @@ void reference_rules() {
     check(kp.strict_text.find(U"Оглавление") != Text::npos, "strict text keeps provider preamble");
     auto r = compare(tech, kp, Mode::structured);
     check(has(r, notes) && has(r, note_position) && !has(r, words), "note movement and text remain separate");
+    const auto phrasing = diff(
+        U"<p>Пункт.<span class='mark'>(В редакции Указа Президента от 01.07.2014 № 483)</span></p>",
+        U"<p>Пункт.<span class='mark'>(в ред. Указа Президента от 01.07.2014 N 483)</span></p>");
+    const auto note = std::find_if(phrasing.changes.begin(), phrasing.changes.end(),
+        [](const Change& change) { return change.mask & notes; });
+    check(note != phrasing.changes.end() && note->before.size() > 20 &&
+          !note->left_marks.empty() && note->left_marks.front().end - note->left_marks.front().start < note->before.size(),
+          "editorial phrasing remains visible but highlights only changed words");
     auto coloured = doc(U"<p>Правило.<span style='background: #f4f3f8'>Отметка</span></p>");
     check(coloured.blocks[0].text == U"Правило." && coloured.blocks[0].annotations[0].text == U"Отметка",
           "reference shaded note");
@@ -220,6 +228,12 @@ void encoding_and_links() {
     auto links = diff(U"<p><a href='http://example.org/a'>Документ</a></p>",
                       U"<p><a href='https://example.org/a'>Документ</a></p><script>ignored()</script>");
     check(links.changes.size() == 1 && links.changes.front().mask == hc::links, "link protocol change");
+    auto anchors = diff(U"<p>См. пункт 1.</p>",
+                        U"<p><a href='#Par18'>См. пункт 1.</a></p>");
+    check(!has(anchors, hc::links), "provider-specific internal paragraph links are ignored");
+    auto linked_text = diff(U"<p><a href='#Par18'>См. пункт 1.</a></p>",
+                            U"<p><a href='#Par39'>См. пункт 1.</a></p>");
+    check(!has(linked_text, hc::links), "different internal paragraph anchors are ignored");
     check(links.right.strict_text.find(U"ignored") == Text::npos, "scripts excluded from strict text");
 }
 } // namespace

@@ -254,9 +254,21 @@ Text joined_notes(const Block& block) {
     }
     return text;
 }
-Text joined_links(const Block& block) {
+bool source_anchor(View target) {
+    const auto normalized = lower(compact(target));
+    return normalized.size() >= 4 && normalized.substr(0, 4) == U"#par";
+}
+
+std::vector<std::pair<Text, Text>> comparison_links(const Block& block) {
+    std::vector<std::pair<Text, Text>> result;
+    for (const auto& link : block.destinations)
+        if (!source_anchor(link.second)) result.push_back(link);
+    return result;
+}
+
+Text joined_links(const std::vector<std::pair<Text, Text>>& links) {
     Text text;
-    for (const auto& link : block.destinations) {
+    for (const auto& link : links) {
         if (!text.empty()) text += U'\n';
         text += link.first + U" → " + link.second;
     }
@@ -339,8 +351,11 @@ public:
             else if (!metadata_only) compare_text(a->text, b->text, 0, 0, 0, a->section,
                               a->kind == Kind::heading || a->kind == Kind::signature);
             compare_notes(*a, *b);
-            if (a->destinations != b->destinations)
-                add(links, Priority::low, joined_links(*a), joined_links(*b), a->section, U"Различаются ссылки.");
+            const auto left_links = comparison_links(*a);
+            const auto right_links = comparison_links(*b);
+            if (left_links != right_links)
+                add(links, Priority::low, joined_links(left_links), joined_links(right_links),
+                    a->section, U"Различаются ссылки.");
         }
     }
 private:
@@ -427,8 +442,40 @@ private:
             if (!removed.empty()) detail += U"Удалено: " + join_refs(removed) + U". ";
             if (detail.empty()) detail = U"Изменился текст редакционной отметки.";
             auto level = ar != br || repealed(x) || repealed(y) ? Priority::high : Priority::medium;
+            const auto left_tokens = tokens(x), right_tokens = tokens(y);
+            const auto token_edits = edits(static_cast<int>(left_tokens.size()), static_cast<int>(right_tokens.size()),
+                [&](int i, int j) {
+                    return piece(x, left_tokens[i]) == piece(y, right_tokens[j]);
+                });
+            const auto map_note_span = [](const Block& block, Span range) {
+                std::vector<Span> mapped;
+                const auto displayed = annotation_spans(block);
+                std::size_t joined_start = 0;
+                for (std::size_t i = 0; i < block.annotations.size(); ++i) {
+                    const auto joined_end = joined_start + block.annotations[i].text.size();
+                    const auto start = std::max(range.start, joined_start);
+                    const auto end = std::min(range.end, joined_end);
+                    if (start < end)
+                        mapped.push_back({displayed[i].start + start - joined_start,
+                                          displayed[i].start + end - joined_start, notes});
+                    joined_start = joined_end + (i + 1 < block.annotations.size() ? 1 : 0);
+                }
+                return mapped;
+            };
+            const auto character_range = [](View text, const std::vector<Span>& spans, Span range) {
+                const auto start = range.start == spans.size() ? text.size() : spans[range.start].start;
+                const auto end = range.start == range.end ? start : spans[range.end - 1].end;
+                return Span{start, end, notes};
+            };
+            std::vector<Span> left_marks, right_marks;
+            for (const auto& edit : token_edits) {
+                auto lm = map_note_span(a, character_range(x, left_tokens, edit.left));
+                auto rm = map_note_span(b, character_range(y, right_tokens, edit.right));
+                left_marks.insert(left_marks.end(), lm.begin(), lm.end());
+                right_marks.insert(right_marks.end(), rm.begin(), rm.end());
+            }
             add(notes, level, x, y, a.section.empty() ? a.text.substr(0, 140) : a.section,
-                std::move(detail), annotation_spans(a), annotation_spans(b));
+                std::move(detail), std::move(left_marks), std::move(right_marks));
         }
         std::vector<bool> ap, bp;
         for (const auto& n : a.annotations) ap.push_back(n.after);
