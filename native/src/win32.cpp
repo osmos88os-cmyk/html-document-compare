@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cwchar>
 #include <memory>
 #include <thread>
 
@@ -83,6 +84,14 @@ struct Completion {
     Text error;
 };
 
+void protect_source(const fs::path& output, const fs::path& left, const fs::path& right) {
+    for (const auto& source : {left, right}) {
+        std::error_code error;
+        if (!source.empty() && fs::equivalent(output, source, error))
+            throw Error("Выберите другой файл. Исходный HTML нельзя перезаписать.");
+    }
+}
+
 class App {
 public:
     explicit App(HINSTANCE instance) : instance_(instance) {}
@@ -138,7 +147,6 @@ private:
     void update_tooltip();
     void draw_icon(const DRAWITEMSTRUCT&);
     void preferences();
-    void protect_source(const fs::path& output) const;
     int px(int units) const { return MulDiv(units, dpi_, 96); }
 };
 
@@ -327,7 +335,11 @@ void App::layout() {
         y += row + gap;
     }
     int x = margin;
-    auto tool = [&](HWND control, int width) { move(control, x, y, px(width), row); x += px(width) + gap; };
+    auto tool = [&](HWND control, int width) {
+        if (x + px(width) > w - margin && x > margin) { x = margin; y += row + gap; }
+        move(control, x, y, px(width), row);
+        x += px(width) + gap;
+    };
     if (!fullscreen_) tool(start_, 86);
     tool(settings_, 162);
     tool(binoculars_, 40);
@@ -652,14 +664,6 @@ void App::preferences() {
     }
 }
 
-void App::protect_source(const fs::path& output) const {
-    for (const auto& source : {left_, right_}) {
-        std::error_code error;
-        if (!source.empty() && fs::equivalent(output, source, error))
-            throw Error("Выберите другой файл. Исходный HTML нельзя перезаписать.");
-    }
-}
-
 void App::command(int id, int notification) {
     if (busy_) return;
     if (id == search && notification == EN_CHANGE) { filter(); return; }
@@ -680,7 +684,7 @@ void App::command(int id, int notification) {
     case save: if (result_) {
         const auto path = file_dialog(window_, true, L"Проверка JSON\0*.json\0", L"json", L"Проверка.json");
         if (!path.empty()) {
-            protect_source(path); save_review(*result_, path); dirty_ = false;
+            protect_source(path, left_, right_); save_review(*result_, path); dirty_ = false;
             set(summary_, U"Проверка сохранена.");
         }
         break;
@@ -696,7 +700,7 @@ void App::command(int id, int notification) {
     case report: if (result_) {
         const auto path = file_dialog(window_, true, L"Отчёт HTML\0*.html\0", L"html", L"Отчёт сверки.html");
         if (!path.empty()) {
-            protect_source(path); export_report(*result_, path);
+            protect_source(path, left_, right_); export_report(*result_, path);
             set(summary_, U"Отчёт сохранён.");
         }
         break;
@@ -739,6 +743,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     try {
         if (report_only) {
             const auto mode = argc == 6 && std::wstring_view(args[5]) == L"--strict" ? Mode::strict : Mode::structured;
+            protect_source(args[4], args[2], args[3]);
             auto left = parse_file(args[2]);
             auto right = parse_file(args[3]);
             export_report(compare(std::move(left), std::move(right), mode), args[4]);

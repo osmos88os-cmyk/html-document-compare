@@ -145,9 +145,33 @@ void Sheet::visible(const std::vector<std::size_t>& changes, Mask mask) {
 
 void Sheet::select(std::size_t change, bool reveal) {
     selected_ = change;
-    if (reveal && result_ && change < result_->changes.size()) {
-        scroll(tops_[result_->changes[change].pair]);
-    } else InvalidateRect(window_, nullptr, FALSE);
+    if (!reveal || !result_ || change >= result_->changes.size()) {
+        InvalidateRect(window_, nullptr, FALSE);
+        return;
+    }
+    const auto& item = result_->changes[change];
+    const auto& pair = result_->pairs[item.pair];
+    const auto locate = [&](const Block& block, const std::vector<Span>& marks) {
+        const auto side = layout(block, sheet_width() - 32 * scale_);
+        for (auto span : marks) {
+            if (span.empty() || !(span.mask & mask_)) continue;
+            for (const auto& placed : side.runs) {
+                if (span.end <= placed.start || span.start >= placed.start + placed.utf16_offsets.size()) continue;
+                const auto offset = std::max(span.start, placed.start) - placed.start;
+                FLOAT x = 0, y = 0;
+                DWRITE_HIT_TEST_METRICS hit{};
+                if (SUCCEEDED(placed.layout->HitTestTextPosition(placed.utf16_offsets[offset], FALSE, &x, &y, &hit)))
+                    return 10.f * scale_ + placed.y + y;
+            }
+        }
+        return -1.f;
+    };
+    float offset = pair.right < 0 ? -1 : locate(result_->right.blocks[pair.right], item.right_marks);
+    if (offset < 0 && pair.left >= 0) offset = locate(result_->left.blocks[pair.left], item.left_marks);
+    const auto position = tops_[item.pair] + std::max(0.f, offset);
+    if (position < scroll_ || position >= scroll_ + viewport() - 32 * scale_)
+        scroll(std::max(0.f, position - 24 * scale_));
+    else InvalidateRect(window_, nullptr, FALSE);
 }
 
 Sheet::Position Sheet::position() const {

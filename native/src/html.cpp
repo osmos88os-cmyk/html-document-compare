@@ -4,6 +4,7 @@
 #include <memory>
 #include <regex>
 #include <set>
+#include <unordered_map>
 #include <libxml/HTMLparser.h>
 #include <libxml/tree.h>
 
@@ -57,18 +58,24 @@ bool source_class(const xmlNode* n, View value) {
     return false;
 }
 
-void strict_content(const xmlNode* n, Text& out) {
+using Offsets = std::unordered_map<const xmlNode*, std::size_t>;
+void strict_content(const xmlNode* n, Text& out, Offsets& offsets, std::vector<Script>& scripts) {
     if (n->type == XML_TEXT_NODE || n->type == XML_CDATA_SECTION_NODE) {
         out += node_text(n);
         return;
     }
     const auto name = tag(n);
     if (name.empty() || skip(name)) return;
+    if (container(name)) offsets.emplace(n, out.size());
     if (name == "br") {
         out += U'\n';
         return;
     }
-    for (auto child = n->children; child; child = child->next) strict_content(child, out);
+    const auto start = out.size();
+    for (auto child = n->children; child; child = child->next) strict_content(child, out, offsets, scripts);
+    const bool raised = name == "sup" || class_is(n, U"W9");
+    const bool lowered = name == "sub" || class_is(n, U"W8");
+    if ((raised || lowered) && out.size() > start) scripts.push_back({{start, out.size(), format}, raised});
     if (container(name) && name != "body") out += U'\n';
 }
 
@@ -107,6 +114,18 @@ void flatten(const xmlNode* n, Parts& out, bool marked = false) {
         }
     }
     if (name == "p" || name == "div" || name == "li" || name == "td") text += U' ';
+}
+
+const xmlNode* provider_start(const xmlNode* n) {
+    if (n->type != XML_ELEMENT_NODE || skip(tag(n))) return nullptr;
+    if (tag(n) == "div" && class_is(n, U"s2B")) {
+        Parts p;
+        flatten(n, p);
+        if (compact(p.body) == U"УКАЗ") return n;
+    }
+    for (auto child = n->children; child; child = child->next)
+        if (const auto* start = provider_start(child)) return start;
+    return nullptr;
 }
 
 std::vector<const xmlNode*> table_rows(const xmlNode* n) {
@@ -185,7 +204,7 @@ bool note_start(View value) {
     for (View prefix : {U"в ред.", U"в редакции", U"дополнен", U"дополнение", U"введен", U"введён",
                         U"пункт введ", U"подпункт введ", U"абзац введ", U"примечание", U"примечания", U"см. текст"})
         if (starts(text, prefix)) return true;
-    static const std::regex short_note(R"(^пп?\.\s*\S+\s+(введен|в ред\.))");
+    static const std::regex short_note(R"(^(?:п|пп)\.\s*\S+\s+(введен|введён|в ред\.))");
     return std::regex_search(utf8(text), short_note);
 }
 
@@ -211,7 +230,8 @@ void append_refs(Document& document, View text) {
 
 class Collector {
 public:
-    explicit Collector(Document& doc) : doc_(doc) {}
+    Collector(Document& doc, const xmlNode* start, const Offsets& offsets)
+        : doc_(doc), start_(start), started_(!start), offsets_(offsets) {}
     void collect(const xmlNode* n) {
         const auto name = tag(n);
         if (skip(name)) return;
@@ -231,8 +251,13 @@ public:
     }
 private:
     Document& doc_;
+    const xmlNode* start_;
+    bool started_;
+    const Offsets& offsets_;
     Text section_;
     void add(const xmlNode* n, Parts p) {
+        if (n == start_) started_ = true;
+        if (!started_) return;
         auto text = compact(p.body);
         auto note = compact(p.editorial);
         const auto name = tag(n);
@@ -274,6 +299,10 @@ private:
         Block b;
         b.text = std::move(text);
         b.source_line = xmlGetLineNo(n);
+        for (auto at = n; at; at = at->parent) {
+            auto match = offsets_.find(at);
+            if (match != offsets_.end()) { b.strict_offset = match->second; break; }
+        }
         b.destinations = std::move(p.links);
         if (!note.empty()) b.annotations.push_back({std::move(note), false});
         if (name == "table" && !table_rows(n).empty()) {
@@ -334,7 +363,11 @@ Document parse(std::string_view raw, Text name) {
     Document doc;
     doc.name = std::move(name);
     doc.hash = sha256(raw);
-    strict_content(body, doc.strict_text);
+    Offsets offsets;
+    strict_content(body, doc.strict_text, offsets, doc.strict_scripts);
+    std::sort(doc.strict_scripts.begin(), doc.strict_scripts.end(), [](const Script& a, const Script& b) {
+        return a.span.start < b.span.start;
+    });
     const auto full = compact(doc.strict_text);
     doc.source = U"HTML";
     if (has(full, U"Документ предоставлен КонсультантПлюс") ||
@@ -359,7 +392,7 @@ Document parse(std::string_view raw, Text name) {
         }
     }
     if (std::regex_search(prelude, match, revision)) doc.revision = unicode(match[1].str());
-    Collector(doc).collect(body);
+    Collector(doc, doc.source == U"К+" ? provider_start(body) : nullptr, offsets).collect(body);
     if (doc.blocks.empty() && full.empty()) throw Error("В HTML не найден текст документа.");
     if (doc.blocks.empty()) doc.warnings.push_back(U"Текст доступен в строгом режиме.");
     if (doc.amendments.empty()) {

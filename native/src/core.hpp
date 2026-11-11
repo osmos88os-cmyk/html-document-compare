@@ -51,6 +51,13 @@ struct Span {
     bool empty() const { return start == end; }
 };
 struct Edit { Span left; Span right; };
+struct Script {
+    Span span;
+    bool raised;
+    bool operator==(const Script& other) const {
+        return span.start == other.span.start && span.end == other.span.end && raised == other.raised;
+    }
+};
 struct Note { Text text; bool after = false; };
 struct Cell {
     Text text;
@@ -71,6 +78,8 @@ struct Block {
     std::vector<Text> row_text;
     std::vector<Span> row_display;
     long source_line = 0;
+    std::size_t strict_offset = 0;
+    std::vector<Script> scripts;
 };
 struct Document {
     Text name;
@@ -83,6 +92,7 @@ struct Document {
     std::vector<Text> warnings;
     std::vector<Block> blocks;
     Text strict_text;
+    std::vector<Script> strict_scripts;
 };
 
 Document parse(std::string_view raw, Text name = U"Документ.html");
@@ -104,6 +114,7 @@ struct Change {
     std::size_t pair = 0;
     Mask mask = 0;
     Priority priority = Priority::low;
+    Priority original_priority = Priority::low;
     Decision decision = Decision::pending;
     Text before;
     Text after;

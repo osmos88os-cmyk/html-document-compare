@@ -249,7 +249,41 @@ Text canonical(View text, bool heading) {
     }
     static const std::regex enum_parens(R"(^(\d+)\((\d+)\)([.)]))");
     static const std::regex enum_decimal(R"(^(\d+)\.(\d+)([.)]))");
+    static const std::regex roman_suffix(R"((\d+)-([IVXLCDM]+)\b)");
+    static const std::regex scientific(R"((\d+)\s*(?:х|x)\s*(\d+\.[\d-]+))");
+    static const std::regex footnote(R"(\s?<([\d*]+)>)");
     auto value = std::regex_replace(std::regex_replace(utf8(result), enum_parens, "$1^$2$3"), enum_decimal, "$1^$2$3");
+    const auto roman_value = [](char c) {
+        switch (c) {
+        case 'I': return 1; case 'V': return 5; case 'X': return 10; case 'L': return 50;
+        case 'C': return 100; case 'D': return 500; default: return 1000;
+        }
+    };
+    std::string converted;
+    std::size_t pos = 0;
+    for (auto i = std::sregex_iterator(value.begin(), value.end(), roman_suffix); i != std::sregex_iterator(); ++i) {
+        auto roman = (*i)[2].str();
+        if (roman.size() > 15) continue;
+        int total = 0;
+        for (std::size_t j = 0; j < roman.size(); ++j) {
+            const int v = roman_value(roman[j]);
+            total += j + 1 < roman.size() && v < roman_value(roman[j + 1]) ? -v : v;
+        }
+        // Convert only canonical Roman numerals, leaving malformed values visible.
+        auto remainder = total;
+        std::string standard;
+        for (const auto& item : {std::pair{1000,"M"}, {900,"CM"}, {500,"D"}, {400,"CD"},
+                                 {100,"C"}, {90,"XC"}, {50,"L"}, {40,"XL"}, {10,"X"},
+                                 {9,"IX"}, {5,"V"}, {4,"IV"}, {1,"I"}}) {
+            while (remainder >= item.first) { standard += item.second; remainder -= item.first; }
+        }
+        if (total < 1 || total > 3999 || standard != roman) continue;
+        const auto start = static_cast<std::size_t>(i->position());
+        converted += value.substr(pos, start - pos) + (*i)[1].str() + "-" + std::to_string(total);
+        pos = start + static_cast<std::size_t>(i->length());
+    }
+    converted += value.substr(pos);
+    value = std::regex_replace(std::regex_replace(converted, scientific, "$1 x $2"), footnote, ".$1");
     result = unicode(value);
     return heading ? lower(result) : result;
 }

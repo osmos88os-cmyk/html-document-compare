@@ -181,6 +181,12 @@ void load_review(Result& result, const fs::path& path) {
     } catch (const Json::exception&) {
         throw Error("Не удалось прочитать файл проверки. Проверьте формат JSON.");
     }
+    for (auto& c : result.changes) {
+        c.decision = Decision::pending;
+        c.priority = c.original_priority;
+        c.comment.clear();
+        c.history.clear();
+    }
     for (auto& entry : staged) {
         auto& c = result.changes[entry.first];
         auto& saved = entry.second;

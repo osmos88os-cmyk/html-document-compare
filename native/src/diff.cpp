@@ -221,8 +221,9 @@ std::vector<Pair> align(const std::vector<Block>& left, const std::vector<Block>
     return result;
 }
 
-std::vector<Block> strict_blocks(View text) {
+std::vector<Block> strict_blocks(View text, const std::vector<Script>& scripts) {
     std::vector<Block> blocks;
+    std::size_t first_script = 0;
     for (std::size_t start = 0; start < text.size();) {
         const auto nl = text.find(U'\n', start);
         auto end = nl == View::npos ? text.size() : nl + 1;
@@ -230,6 +231,14 @@ std::vector<Block> strict_blocks(View text) {
         end = std::min(end, start + 20000);
         Block b;
         b.text = Text(text.substr(start, end - start));
+        b.strict_offset = start;
+        while (first_script < scripts.size() && scripts[first_script].span.end <= start) ++first_script;
+        for (std::size_t i = first_script; i < scripts.size() && scripts[i].span.start < end; ++i) {
+            auto s = scripts[i];
+            if (s.span.end <= start) continue;
+            s.span = {std::max(s.span.start, start) - start, std::min(s.span.end, end) - start, format};
+            b.scripts.push_back(s);
+        }
         blocks.push_back(std::move(b));
         start = end;
     }
@@ -284,7 +293,7 @@ class Comparison {
 public:
     explicit Comparison(Result& result) : result_(result) {}
 
-    void run() {
+    void run(bool metadata_only = false) {
         std::size_t left_offset = 0, right_offset = 0;
         for (pair_ = 0; pair_ < result_.pairs.size(); ++pair_) {
             const auto& pair = result_.pairs[pair_];
@@ -294,22 +303,31 @@ public:
                 const View left = a ? View(a->text) : View{};
                 const View right = b ? View(b->text) : View{};
                 bool coarse = false;
-                for (auto e : character_edits(left, right, &coarse)) {
+                const auto operations = character_edits(left, right, &coarse);
+                for (auto e : operations) {
                     text_change(left, right, e, 0, 0, a && b ? 0 : structure, {});
                     e.left.start += left_offset; e.left.end += left_offset;
                     e.right.start += right_offset; e.right.end += right_offset;
                     result_.strict_operations.push_back(e);
                 }
+                if (a && b && a->scripts != b->scripts) {
+                    std::vector<Span> lm, rm;
+                    for (const auto& s : a->scripts) lm.push_back(s.span);
+                    for (const auto& s : b->scripts) rm.push_back(s.span);
+                    add(format, Priority::low, Text(left), Text(right), {},
+                        U"Изменились надстрочные или подстрочные индексы.", std::move(lm), std::move(rm));
+                }
                 if (coarse) warn(U"Большой заменённый фрагмент показан целиком.");
                 left_offset += left.size(); right_offset += right.size();
                 continue;
             }
-            if (pair.ambiguous) {
+            if (pair.ambiguous && !metadata_only) {
                 warn(U"Есть неоднозначные пары блоков. Проверьте их вручную.");
                 add(structure, Priority::high, a ? a->text : Text{}, b ? b->text : Text{},
                     U"Неоднозначное сопоставление", U"Нужно проверить соответствие блоков.");
             }
             if (!a || !b) {
+                if (metadata_only) continue;
                 const auto before = a ? display_text(*a) : Text{};
                 const auto after = b ? display_text(*b) : Text{};
                 add(structure, Priority::high, before, after, a ? a->section : b->section,
@@ -317,8 +335,8 @@ public:
                     {{0, before.size(), structure}}, {{0, after.size(), structure}});
                 continue;
             }
-            if (a->kind == Kind::table && b->kind == Kind::table) compare_table(*a, *b);
-            else compare_text(a->text, b->text, 0, 0, 0, a->section,
+            if (a->kind == Kind::table && b->kind == Kind::table) compare_table(*a, *b, metadata_only);
+            else if (!metadata_only) compare_text(a->text, b->text, 0, 0, 0, a->section,
                               a->kind == Kind::heading || a->kind == Kind::signature);
             compare_notes(*a, *b);
             if (a->destinations != b->destinations)
@@ -346,6 +364,7 @@ private:
         c.pair = pair_;
         c.mask = mask;
         c.priority = p;
+        c.original_priority = p;
         c.before = std::move(before);
         c.after = std::move(after);
         c.context = std::move(context);
@@ -420,7 +439,7 @@ private:
         }
     }
 
-    void compare_table(const Block& a, const Block& b) {
+    void compare_table(const Block& a, const Block& b, bool metadata_only) {
         auto rows = [](const Block& block) {
             std::vector<Block> result;
             for (const auto& text : block.row_text) {
@@ -456,7 +475,7 @@ private:
                     position, U"Добавлена или удалена ячейка.", l ? std::vector<Span>{l->display} : std::vector<Span>{},
                     r ? std::vector<Span>{r->display} : std::vector<Span>{});
                 else {
-                    compare_text(l->text, r->text, l->display.start, r->display.start, tables, position);
+                    if (!metadata_only) compare_text(l->text, r->text, l->display.start, r->display.start, tables, position);
                     if (l->rowspan != r->rowspan || l->colspan != r->colspan || l->header != r->header)
                         add(tables, Priority::medium, number_text(l->rowspan) + U" × " + number_text(l->colspan),
                             number_text(r->rowspan) + U" × " + number_text(r->colspan), position,
@@ -500,14 +519,51 @@ Result compare(Document left, Document right, Mode mode) {
         result.warnings.push_back(U"Реквизиты актов различаются. Проверьте выбранные документы.");
     if (a.revision != b.revision) result.warnings.push_back(U"Различаются даты редакций или состояния документа.");
     if (a.amendments != b.amendments) result.warnings.push_back(U"Различаются списки изменяющих актов.");
+    std::vector<std::pair<Change, std::pair<bool, std::size_t>>> metadata;
     if (mode == Mode::strict) {
-        a.blocks = strict_blocks(a.strict_text);
-        b.blocks = strict_blocks(b.strict_text);
+        result.mode = Mode::structured;
+        result.pairs = align(a.blocks, b.blocks);
+        Comparison(result).run(true);
+        for (auto& change : result.changes) {
+            const auto& pair = result.pairs[change.pair];
+            const bool right = pair.right >= 0;
+            const auto offset = right ? b.blocks[pair.right].strict_offset : a.blocks[pair.left].strict_offset;
+            metadata.emplace_back(std::move(change), std::make_pair(right, offset));
+        }
+        result.changes.clear();
+        a.blocks = strict_blocks(a.strict_text, a.strict_scripts);
+        b.blocks = strict_blocks(b.strict_text, b.strict_scripts);
+        result.mode = Mode::strict;
     }
     result.pairs = align(a.blocks, b.blocks, mode == Mode::strict);
     Comparison(result).run();
-    if (mode == Mode::strict && apply_edits(a.strict_text, b.strict_text, result.strict_operations) != b.strict_text)
-        throw Error("Не удалось проверить полноту строгой сверки.");
+    if (mode == Mode::strict) {
+        if (apply_edits(a.strict_text, b.strict_text, result.strict_operations) != b.strict_text)
+            throw Error("Не удалось проверить полноту строгой сверки.");
+        std::vector<std::size_t> lp(a.blocks.size()), rp(b.blocks.size());
+        for (std::size_t i = 0; i < result.pairs.size(); ++i) {
+            auto pair = result.pairs[i];
+            if (pair.left >= 0) lp[pair.left] = i;
+            if (pair.right >= 0) rp[pair.right] = i;
+        }
+        for (auto& item : metadata) {
+            auto& c = item.first;
+            const bool right = item.second.first;
+            const auto offset = item.second.second;
+            const auto& blocks = right ? b.blocks : a.blocks;
+            const auto anchor = std::upper_bound(blocks.begin(), blocks.end(), offset,
+                [](std::size_t value, const Block& block) { return value < block.strict_offset; });
+            if (anchor == blocks.begin()) continue;
+            c.pair = (right ? rp : lp)[anchor - blocks.begin() - 1];
+            c.id = sha256("strict-metadata:" + c.id);
+            c.left_marks.clear();
+            c.right_marks.clear();
+            result.changes.push_back(std::move(c));
+        }
+        std::stable_sort(result.changes.begin(), result.changes.end(), [](const Change& l, const Change& r) {
+            return l.pair < r.pair;
+        });
+    }
     return result;
 }
 } // namespace hc

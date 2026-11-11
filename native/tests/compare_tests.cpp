@@ -81,6 +81,13 @@ void strict_text() {
     auto single = diff(U"<p>А  Б.</p>", U"<p>А Б.</p>", Mode::strict);
     check(single.changes.size() == 1 && single.changes.front().before == U" " &&
           single.changes.front().after.empty(), "one extra space is localized");
+    auto index = diff(U"<p>Число 10<sup>2</sup>.</p>", U"<p>Число 102.</p>", Mode::strict);
+    check(index.strict_operations.empty() && has(index, format), "strict mode notices superscript markup");
+    auto target = diff(U"<p><a href='/first'>Документ</a></p>", U"<p><a href='/second'>Документ</a></p>", Mode::strict);
+    check(target.strict_operations.empty() && has(target, links), "strict mode compares link destinations");
+    auto merged = diff(U"<table><tr><td colspan='2'>Заголовок</td></tr></table>",
+                       U"<table><tr><td>Заголовок</td></tr></table>", Mode::strict);
+    check(merged.strict_operations.empty() && has(merged, tables), "strict mode compares table geometry");
 }
 
 void categories_and_ranges() {
@@ -111,13 +118,14 @@ void aligned_insertion() {
 }
 
 void reference_rules() {
-    const auto kp = doc(U"<div>Документ предоставлен КонсультантПлюс</div><div class='s2B'>УКАЗ</div>"
+    const auto kp = doc(U"<div>Документ предоставлен КонсультантПлюс</div><div>Оглавление</div><div class='s2B'>УКАЗ</div>"
                         U"<p>6. Выплатить.</p><p>часть 6.1 в ред. Федерального закона от 01.07.2014 N 483</p>");
     const auto tech = doc(U"<div class='fragments'><div class='T'>УКАЗ</div><p>6. Выплатить."
                           U"<span class='mark'>(В редакции </span><span class='mark'>Указа от 01.07.2014 № 483)</span></p></div>");
     check(kp.source == U"К+" && tech.source == U"Комплекс / ТЕХН", "provider signatures");
     check(kp.blocks.size() == 2 && kp.blocks.back().annotations.size() == 1 &&
           tech.blocks.back().annotations.size() == 1, "reference notes extracted");
+    check(kp.strict_text.find(U"Оглавление") != Text::npos, "strict text keeps provider preamble");
     auto r = compare(tech, kp, Mode::structured);
     check(has(r, notes) && has(r, note_position) && !has(r, words), "note movement and text remain separate");
     auto coloured = doc(U"<p>Правило.<span style='background: #f4f3f8'>Отметка</span></p>");
@@ -168,6 +176,12 @@ void tables_and_independent_decisions() {
     check(reopened.changes[0].decision == Decision::confirmed &&
           reopened.changes[1].decision == Decision::acceptable &&
           reopened.changes[0].history[0].comment == U"<проверено>", "JSON preserves distinct decisions and history");
+    auto empty = temp.path / "empty.json";
+    save_review(changed_cells(), empty);
+    auto reset = reopened;
+    load_review(reset, empty);
+    check(reset.changes[0].decision == Decision::pending && reset.changes[0].history.empty() &&
+          reset.changes[1].priority == reset.changes[1].original_priority, "a saved review replaces prior decisions");
     auto report = temp.path / "report.html";
     export_report(reopened, report);
     check(read_file(report, 100000).find(u8"&lt;проверено&gt;") != std::string::npos, "report escapes comments");
@@ -200,7 +214,45 @@ void encoding_and_links() {
 }
 } // namespace
 
-int main() {
+int sample_pairs(const fs::path& tech, const fs::path& gpu, const fs::path& kplus) {
+    std::size_t pairs = 0;
+    bool passed = true;
+    for (const auto& entry : fs::directory_iterator(gpu)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".html") continue;
+        const auto left = parse_file(tech / entry.path().filename());
+        std::vector<std::pair<std::string, fs::path>> versions{{"GPU", entry.path()}};
+        for (const auto& item : fs::directory_iterator(kplus)) {
+            if (item.is_regular_file() && item.path().extension() == ".html" &&
+                item.path().filename().u8string().find(" N " + utf8(left.act_number) + " ") != std::string::npos)
+                versions.emplace_back("K+", item.path());
+        }
+        if (versions.size() != 2) throw Error("Expected one matching K+ file per act.");
+        for (const auto& version : versions) {
+            const auto right = parse_file(version.second);
+            const auto result = compare(left, right, Mode::structured);
+            std::size_t content = 0;
+            for (const auto& c : result.changes) if (c.mask & (words | numbers | structure | punctuation | tables)) {
+                if (++content <= 16)
+                    std::cout << "  " << utf8(category_names(c.mask)) << ": "
+                              << utf8(c.before.substr(0, 90)) << " → " << utf8(c.after.substr(0, 90)) << '\n';
+            }
+            const auto strict = compare(left, right, Mode::strict);
+            std::cout << utf8(left.act_number) << ' ' << version.first << " · "
+                      << left.blocks.size() << '/' << right.blocks.size() << " blocks · "
+                      << content << " content differences · " << strict.strict_operations.size()
+                      << " verified strict operations\n";
+            passed = passed && content == 0;
+            ++pairs;
+        }
+    }
+    return passed && pairs == 6 ? 0 : 1;
+}
+
+int main(int argc, char** argv) {
+    if (argc == 5 && std::string_view(argv[1]) == "--samples") {
+        try { return sample_pairs(fs::u8path(argv[2]), fs::u8path(argv[3]), fs::u8path(argv[4])); }
+        catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+    }
     const std::vector<std::pair<const char*, std::function<void()>>> cases = {
         {"character edit scripts", edits_round_trip}, {"XHTML", ordinary_xhtml}, {"strict text", strict_text},
         {"categories and ranges", categories_and_ranges}, {"alignment", aligned_insertion},

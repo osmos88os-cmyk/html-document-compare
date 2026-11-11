@@ -1,9 +1,8 @@
-name: Windows build
+name: Qt Windows v0.1 maintenance
 
 on:
   push:
-    branches: [main]
-    tags: ['v*']
+    tags: ['v0.1.*']
   workflow_dispatch:
 
 permissions:
